@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Screen Flashlight</title>
+  <style>
+    :root {
+      --ui-bg: rgba(20, 20, 20, 0.55);
+      --ui-fg: #fff;
+      --ui-border: rgba(255, 255, 255, 0.25);
+      --ui-active: rgba(255, 255, 255, 0.35);
+      --radius: 12px;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #fff;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      -webkit-tap-highlight-color: transparent;
+    }
+    #screen {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      background: #ffffff;
+    }
+    #controls {
+      position: fixed;
+      left: 50%;
+      bottom: max(16px, env(safe-area-inset-bottom));
+      transform: translateX(-50%);
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 12px;
+      max-width: min(720px, calc(100vw - 24px));
+      background: var(--ui-bg);
+      color: var(--ui-fg);
+      border: 1px solid var(--ui-border);
+      border-radius: 16px;
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      box-shadow: 0 8px 24px rgba(0,0,0,0.25);
+      opacity: 1;
+      transition: opacity 0.35s ease, visibility 0.35s ease;
+      visibility: visible;
+      z-index: 10;
+    }
+    #controls.hidden {
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+    }
+    button, .picker-label {
+      appearance: none;
+      border: 1px solid var(--ui-border);
+      background: rgba(255,255,255,0.12);
+      color: var(--ui-fg);
+      padding: 10px 14px;
+      border-radius: var(--radius);
+      font: inherit;
+      font-size: 15px;
+      line-height: 1;
+      cursor: pointer;
+      user-select: none;
+      min-height: 44px;
+    }
+    button:hover { background: rgba(255,255,255,0.2); }
+    button:active { background: var(--ui-active); }
+    button.active {
+      background: rgba(255,255,255,0.32);
+      border-color: rgba(255,255,255,0.55);
+    }
+    .picker-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 12px 6px 8px;
+    }
+    .picker-label input[type="color"] {
+      width: 32px;
+      height: 32px;
+      border: none;
+      padding: 0;
+      background: none;
+      cursor: pointer;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .picker-label input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+    .picker-label input[type="color"]::-webkit-color-swatch { border: 1px solid var(--ui-border); border-radius: 8px; }
+    .speed-wrap {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border: 1px solid var(--ui-border);
+      background: rgba(255,255,255,0.08);
+      border-radius: var(--radius);
+      min-height: 44px;
+      font-size: 14px;
+    }
+    .speed-wrap label { white-space: nowrap; }
+    .speed-wrap input[type="range"] {
+      width: 120px;
+      max-width: 32vw;
+      accent-color: #fff;
+      cursor: pointer;
+    }
+    @media (max-width: 420px) {
+      #controls { gap: 6px; padding: 10px; }
+      button, .picker-label { padding: 10px 12px; font-size: 14px; }
+      .speed-wrap input[type="range"] { width: 96px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="screen" aria-hidden="true"></div>
+
+  <div id="controls" role="toolbar" aria-label="Kontrol warna">
+    <button type="button" id="btn-white" data-color="#ffffff">Putih</button>
+    <button type="button" id="btn-red" data-color="#ff0000">Merah</button>
+    <button type="button" id="btn-green" data-color="#00ff00">Hijau</button>
+    <button type="button" id="btn-blue" data-color="#0000ff">Biru</button>
+    <button type="button" id="btn-cycle">Siklus</button>
+    <label class="picker-label" title="Warna">
+      <input type="color" id="picker" value="#ffffff" aria-label="Pilih warna">
+      <span>Warna</span>
+    </label>
+    <div class="speed-wrap" title="Durasi satu putaran siklus">
+      <label for="speed">Kecepatan</label>
+      <input type="range" id="speed" min="2" max="30" step="1" value="8" aria-label="Kecepatan siklus (detik per putaran)">
+    </div>
+    <button type="button" id="btn-fullscreen">Layar Penuh</button>
+  </div>
+
+  <script>
+    (function () {
+      var screen = document.getElementById('screen');
+      var controls = document.getElementById('controls');
+      var picker = document.getElementById('picker');
+      var speedInput = document.getElementById('speed');
+      var cycleBtn = document.getElementById('btn-cycle');
+      var fullscreenBtn = document.getElementById('btn-fullscreen');
+      var presetBtns = Array.prototype.slice.call(document.querySelectorAll('[data-color]'));
+
+      var L = 0.75;
+      var C = 0.18;
+      var cycling = false;
+      var hue = 0;
+      var rafId = null;
+      var lastTs = null;
+      var hideTimer = null;
+      var HIDE_DELAY = 3000;
+
+      function setScreenColor(color) {
+        screen.style.background = color;
+        document.body.style.background = color;
+      }
+
+      function setActivePreset(color) {
+        presetBtns.forEach(function (btn) {
+          btn.classList.toggle('active', !!color && btn.getAttribute('data-color').toLowerCase() === color.toLowerCase());
+        });
+      }
+
+      function stopCycle() {
+        if (!cycling) return;
+        cycling = false;
+        cycleBtn.classList.remove('active');
+        if (rafId !== null) {
+          cancelAnimationFrame(rafId);
+          rafId = null;
+        }
+        lastTs = null;
+      }
+
+      function applyOklch() {
+        setScreenColor('oklch(' + L + ' ' + C + ' ' + hue + ')');
+      }
+
+      function tick(ts) {
+        if (!cycling) return;
+        if (lastTs === null) lastTs = ts;
+        var dt = (ts - lastTs) / 1000;
+        lastTs = ts;
+        var duration = Math.max(2, Math.min(30, Number(speedInput.value) || 8));
+        hue = (hue + (360 * dt) / duration) % 360;
+        applyOklch();
+        rafId = requestAnimationFrame(tick);
+      }
+
+      function startCycle() {
+        if (cycling) {
+          stopCycle();
+          return;
+        }
+        setActivePreset(null);
+        cycling = true;
+        cycleBtn.classList.add('active');
+        lastTs = null;
+        applyOklch();
+        rafId = requestAnimationFrame(tick);
+        showControls();
+      }
+
+      function selectColor(color) {
+        stopCycle();
+        setScreenColor(color);
+        setActivePreset(color);
+      }
+
+      function showControls() {
+        controls.classList.remove('hidden');
+        if (hideTimer) clearTimeout(hideTimer);
+        hideTimer = setTimeout(function () {
+          controls.classList.add('hidden');
+        }, HIDE_DELAY);
+      }
+
+      function toggleFullscreen() {
+        var doc = document;
+        var el = doc.documentElement;
+        var isFull = doc.fullscreenElement || doc.webkitFullscreenElement || doc.msFullscreenElement;
+        if (!isFull) {
+          var req = el.requestFullscreen || el.webkitRequestFullscreen || el.msRequestFullscreen;
+          if (req) req.call(el);
+        } else {
+          var exit = doc.exitFullscreen || doc.webkitExitFullscreen || doc.msExitFullscreen;
+          if (exit) exit.call(doc);
+        }
+        showControls();
+      }
+
+      presetBtns.forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          selectColor(btn.getAttribute('data-color'));
+          showControls();
+        });
+      });
+
+      cycleBtn.addEventListener('click', startCycle);
+
+      picker.addEventListener('input', function () {
+        var color = picker.value;
+        stopCycle();
+        setScreenColor(color);
+        setActivePreset(color);
+        showControls();
+      });
+
+      speedInput.addEventListener('input', function () {
+        showControls();
+      });
+
+      fullscreenBtn.addEventListener('click', toggleFullscreen);
+
+      ['pointermove', 'pointerdown', 'touchstart', 'mousemove'].forEach(function (evt) {
+        window.addEventListener(evt, showControls, { passive: true });
+      });
+
+      controls.addEventListener('pointerdown', showControls);
+      controls.addEventListener('focusin', showControls);
+
+      document.addEventListener('fullscreenchange', showControls);
+      document.addEventListener('webkitfullscreenchange', showControls);
+
+      // Initial state: white, controls visible, cycle off
+      selectColor('#ffffff');
+      showControls();
+    })();
+  </script>
+</body>
+</html>
